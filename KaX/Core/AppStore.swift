@@ -8,6 +8,7 @@ public final class AppStore {
     public private(set) var posts: [FeedPost]
     public private(set) var people: [Person]
     public private(set) var rankingMeasurements: [RankingMeasurement]
+    public private(set) var staticMeasurements: [StaticMeasurementRecord]
     public private(set) var persistenceError: String?
 
     @ObservationIgnored private let repository: any AppRepository
@@ -31,6 +32,7 @@ public final class AppStore {
         }
         profile = initial.profile; records = initial.records; posts = initial.posts; people = initial.people
         rankingMeasurements = initial.rankingMeasurements ?? (useDemoData ? RankingSampleData.measurements(for: initial.people) : [])
+        staticMeasurements = initial.staticMeasurements ?? []
         persistenceError = initialError
     }
 
@@ -84,6 +86,52 @@ public final class AppStore {
             measurements.removeAll { $0.id == record.id }
             measurements.insert(record, at: 0)
             snapshot.rankingMeasurements = measurements
+        }
+    }
+
+    public func saveStaticMeasurement(_ record: StaticMeasurementRecord) {
+        var validated = record
+        var derived: [RankingMeasurement] = []
+        do {
+            guard record.protocolID == record.feature.protocolID,
+                  record.date.timeIntervalSince1970.isFinite,
+                  record.origin == .manual else {
+                throw StaticPhotoError.message("记录的测量口径、时间或来源无效。")
+            }
+            if let existing = staticMeasurements.first(where: { $0.id == record.id }), existing.feature != record.feature {
+                throw StaticPhotoError.message("记录项目与原记录不一致。")
+            }
+            // Recalculate from inputs, never trust a caller-supplied score.
+            validated.result = try StaticMeasurementCalculator.calculate(feature: record.feature, input: record.input, now: record.date)
+            if record.input.text["inputMode"] == "manual", record.input.text["rankingProtocolConfirmed"] == "true" {
+                let metrics: [RankingMetric]
+                switch record.feature {
+                case .sm02: metrics = [.armSpanRatio]
+                case .sm03: metrics = [.relativeShoulderWidth]
+                case .sm04: metrics = [.shoulderWaistWidthRatio, .waistHipWidthRatio]
+                case .sm07: metrics = [.legBodyRatio]
+                case .sm10: metrics = [.handAspectRatio]
+                case .sm11: metrics = [.footAspectRatio]
+                case .sm12: metrics = record.input.values["waistGirthCM"] != nil && record.input.values["hipGirthCM"] != nil ? [.waistHipGirthRatio] : []
+                default: metrics = []
+                }
+                for metric in metrics {
+                    let values = record.input.values.filter { pair in metric.inputFields.contains { $0.id == pair.key } }
+                    let measurement = RankingMeasurement(personID: profile.id, metric: metric, values: values, date: record.date, origin: .manual, sourceRecordID: record.id)
+                    _ = try measurement.calculatedValue()
+                    derived.append(measurement)
+                }
+            }
+        } catch { persistenceError = "测量未保存：\(error.localizedDescription)"; return }
+        transaction { snapshot in
+            var measurements = snapshot.staticMeasurements ?? []
+            measurements.removeAll { $0.id == record.id }
+            measurements.insert(validated, at: 0)
+            snapshot.staticMeasurements = measurements
+            var rankings = snapshot.rankingMeasurements ?? []
+            rankings.removeAll { $0.sourceRecordID == record.id }
+            rankings.insert(contentsOf: derived, at: 0)
+            snapshot.rankingMeasurements = rankings
         }
     }
 
@@ -175,7 +223,7 @@ public final class AppStore {
         catch { persistenceError = "导出失败：\(error.localizedDescription)"; return nil }
     }
 
-    private var snapshot: AppSnapshot { AppSnapshot(profile: profile, records: records, posts: posts, people: people, rankingMeasurements: rankingMeasurements) }
+    private var snapshot: AppSnapshot { AppSnapshot(profile: profile, records: records, posts: posts, people: people, rankingMeasurements: rankingMeasurements, staticMeasurements: staticMeasurements) }
 
     private func latest(_ kind: MeasurementKind) -> MeasurementRecord? {
         records.filter { $0.kind == kind }.max { $0.date < $1.date }
@@ -234,6 +282,7 @@ public final class AppStore {
             try repository.save(candidate)
             profile = candidate.profile; records = candidate.records; posts = candidate.posts; people = candidate.people
             rankingMeasurements = candidate.rankingMeasurements ?? []
+            staticMeasurements = candidate.staticMeasurements ?? []
             loadingFailed = false
             persistenceError = nil
         } catch { persistenceError = "本地保存失败：\(error.localizedDescription) 更改未应用。" }

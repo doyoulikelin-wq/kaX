@@ -16,9 +16,15 @@ struct ProfileView: View {
         }
     }
 
+    private var independentRankingMeasurements: [RankingMeasurement] {
+        let ids = Set(store.staticMeasurements.map(\.id))
+        return validRankingMeasurements.filter { $0.sourceRecordID.map { !ids.contains($0) } ?? true }
+    }
+
     private var measurementItems: [ProfileMeasurementItem] {
         let items = store.records.map(ProfileMeasurementItem.legacy)
-            + validRankingMeasurements.map(ProfileMeasurementItem.ranking)
+            + independentRankingMeasurements.map(ProfileMeasurementItem.ranking)
+            + store.staticMeasurements.map(ProfileMeasurementItem.staticRecord)
         return items.sorted {
             $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date
         }
@@ -29,7 +35,8 @@ struct ProfileView: View {
             Calendar.current.isDate($0, equalTo: Date(), toGranularity: .month)
         }
         return store.records.filter { $0.origin != .demo && isThisMonth($0.date) }.count
-            + validRankingMeasurements.filter { $0.origin != .demo && isThisMonth($0.date) }.count
+            + independentRankingMeasurements.filter { $0.origin != .demo && isThisMonth($0.date) }.count
+            + store.staticMeasurements.filter { $0.origin != .demo && isThisMonth($0.date) }.count
     }
 
     var body: some View {
@@ -103,6 +110,10 @@ struct ProfileView: View {
                                     recentMeasurementRow(item)
                                 }
                                 .buttonStyle(.plain)
+                            case .staticRecord(let record):
+                                NavigationLink { StaticMeasurementRecordDetailView(record: record) } label: { recentMeasurementRow(item) }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("recentStatic-\(record.id.uuidString)")
                             case .ranking(let measurement):
                                 Button {
                                     guard let value = try? measurement.calculatedValue() else { return }
@@ -242,41 +253,50 @@ struct ProfileView: View {
 private enum ProfileMeasurementItem: Identifiable {
     case legacy(MeasurementRecord)
     case ranking(RankingMeasurement)
+    case staticRecord(StaticMeasurementRecord)
 
     var id: String {
         switch self {
         case .legacy(let record): return "legacy-\(record.id.uuidString)"
         case .ranking(let record): return "ranking-\(record.id.uuidString)"
+        case .staticRecord(let record): return "static-\(record.id.uuidString)"
         }
     }
     var date: Date {
         switch self {
         case .legacy(let record): return record.date
         case .ranking(let record): return record.date
+        case .staticRecord(let record): return record.date
         }
     }
     var title: String {
         switch self {
         case .legacy(let record): return record.title
         case .ranking(let record): return record.metric.title
+        case .staticRecord(let record): return StaticFeatureCatalog.metadata(for: record.feature)?.title ?? record.feature.rawValue
         }
     }
     var symbol: String {
         switch self {
         case .legacy(let record): return record.kind.systemImage
         case .ranking: return "ruler"
+        case .staticRecord: return "ruler"
         }
     }
     var origin: DataOrigin {
         switch self {
         case .legacy(let record): return record.origin
         case .ranking(let record): return record.origin
+        case .staticRecord(let record): return record.origin
         }
     }
     var valueText: String {
         switch self {
         case .legacy(let record):
             return "\(record.value.formatted(.number.precision(.fractionLength(0...1)))) \(record.unit)"
+        case .staticRecord(let record):
+            guard let value = record.result.values.first else { return "已记录" }
+            return "\(value.value.formatted(.number.precision(.fractionLength(0...2)))) \(value.unit)"
         case .ranking(let record):
             guard let value = try? record.calculatedValue() else { return "未记录" }
             return "\(record.metric.formattedValue(value)) \(record.metric.unit)"
@@ -470,6 +490,8 @@ private struct SettingsView: View {
                         }
                     } label: { Label("导出我的数据", systemImage: "square.and.arrow.up") }
                         .accessibilityIdentifier("exportDataButton")
+                    Text("JSON 包含原始数据、结果与照片引用；图片保存在本机，不包含在 JSON 内。")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button(role: .destructive) { confirmingReset = true } label: {
                         Label("重置本机体验", systemImage: "arrow.counterclockwise")
                     }.accessibilityIdentifier("resetDemoButton")
@@ -499,9 +521,12 @@ private struct SettingsView: View {
                     if let error = store.persistenceError {
                         operationErrorTitle = "重置失败"
                         operationError = error
+                    } else {
+                        do { try StaticPhotoFiles.removeAll() }
+                        catch { operationErrorTitle = "照片清理未完成"; operationError = "记录已重置，照片清理失败：\(error.localizedDescription)" }
                     }
                 }
-            } message: { Text("你新增的测量、动态和个人编辑将被删除。建议先导出数据。") }
+            } message: { Text("你新增的测量、采集照片、动态和个人编辑将被删除。JSON 导出包含数据与照片引用，不包含图片本身。") }
             .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .json, defaultFilename: "kaX-data") { result in
                 if case .failure(let error) = result {
                     operationErrorTitle = "导出失败"

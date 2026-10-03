@@ -26,7 +26,7 @@ flowchart TD
 
 - `AppRepository` 定义加载与保存契约；当前 `LocalAppRepository` 使用 Codable JSON 和原子文件替换。
 - 默认路径为应用沙箱 `Application Support/kaX/snapshot.json`。
-- `rankingMeasurements` 是可缺省的新增字段。旧快照保留资料、历史与社交数据；不会将旧身体记录自动标成新协议。已知示例好友可补入明确标为 demo 的合成尺寸，本人须重新记录。
+- `rankingMeasurements` 与 `staticMeasurements` 是可缺省的新增字段。旧快照保留资料、历史与社交数据；不会将旧身体记录自动标成新协议。已知示例好友可补入明确标为 demo 的合成尺寸，本人须重新记录。
 - `schemaVersion` 当前为 1。损坏文件和未支持的新版本不会被启动过程自动覆盖，显式重置可恢复演示快照。
 - 导出生成当前快照的 JSON。UI 测试使用独立临时文件，不触碰普通运行的数据。
 - 未来增加网络时保留本地仓库，另加异步网络服务与同步协调器。网络请求不应放进当前同步 `AppRepository.save`，也不应在主线程阻塞等待。
@@ -46,7 +46,17 @@ flowchart TD
 
 `UnavailableBLEMeasurementDevice` 显式返回尚未接入，避免虚构设备发现或连接成功。真实卡片接入需要确认服务 UUID、特征 UUID、数据包格式、采样时钟、量程、单位及校准方式；届时将这些信息作为版本化记录上下文保存。多人肌群比较还需要同步通道及动作分段。
 
-参照卡拍摄应增加独立的 `BodyMeasurementProvider`，输入照片、可见标记几何与相机参数，输出尺寸估计及质量状态。其结果仅在质量检查通过后保存。当前没有用手动数据冒充视觉测量。
+参照卡自动检测尚未实现。当前照片路径由 `StaticPhotoMeasurementView` 导入照片，`StaticPhotoGeometry` 将显示坐标转成原图像素（x 向右、y 向上），保存用户点位与尺度声明。SM08/09 可调用 Apple Vision 人体姿态初标，结果必须人工复核；未取得有效点位时允许手工标点，且分别保留来源。已校正与共面条件依赖用户声明，没有自动完成镜头标定或误差验证。
+
+## 静态测量库
+
+`StaticBodyCatalog.json` 原样收录源表 `compiled.json`（static-only）的 24 条、来源和协议。`StaticFeatureCatalog` 校验源表并解析目录；`StaticMeasurementCalculator` 独立实现公式，缺失值不补零，非有限值/无效字段拒绝计算。H03 无真实参照库，明确返回不可用。
+
+`StaticMeasurementRecord` 保存项目、输入、输出、测量时间、来源与版本化协议。保存时 AppStore 重新计算，不信任调用方预传结果；静态记录及关联榜单在同一次原子事务中提交。通过 `rankingProtocolConfirmed` 明确确认且 `inputMode=manual` 的兼容尺寸才可进入旧榜，记录 `sourceRecordID`；照片、模型、自设目标、症状不自动入榜。最近测量和月度次数去除关联排名副本，避免重复计数。
+
+照片归一化方向、最长边限制为 2048 px 后存为 JPEG，点位对应这一图像坐标。图片保存在 Application Support/kaX/StaticPhotos，记录保存随机 UUID 引用及点位上下文；JSON 导出包含元数据与结果，不包含图像文件本身。照片选取取消与 Vision 异步返回使用版本标识，防止过期识别覆盖新照片或侧别。测试照片只有在显式 UI 测试参数下才出现。重置记录成功后清理本机采集照片，清理失败单独报告；JSON 导出界面明确不包含图片本身。
+
+H01 采用椭圆假设数值积分，H02 完整保存用户目标区间/尺度/权重；二者均不冒充人体测量验证或客观天赋。H03 保留来源和依赖，SR05/06 只作本人背景记录。
 
 ## 展示和比较
 

@@ -82,20 +82,29 @@ struct MeasurementView: View {
                         ) { presentedSheet = .emg }
                     }
 
-                    Button { presentedSheet = .ranking } label: {
+                    NavigationLink {
+                        StaticMeasurementCatalogView()
+                    } label: {
                         RoundedPanel {
                             HStack(spacing: 14) {
                                 Image(systemName: "ruler").font(.title2).foregroundStyle(KaXTheme.accent)
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text("静态比例测量").font(.headline)
-                                    Text("臂展、坐高、轮廓宽度、手足与围度比例")
+                                    Text("静态身体测量").font(.headline)
+                                    Text("24 项目录 · 原始数据、公式、用途与来源")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer(minLength: 0)
                                 Image(systemName: "chevron.right").font(.caption)
                             }
                         }
-                    }.buttonStyle(.plain).accessibilityIdentifier("staticRankingMeasurementButton")
+                    }.buttonStyle(.plain).accessibilityIdentifier("staticMeasurementCatalogButton")
+
+                    Button { presentedSheet = .ranking } label: {
+                        Label("8 项比例排行快捷录入", systemImage: "list.number")
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .accessibilityIdentifier("staticRankingMeasurementButton")
 
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeading(title: "最近记录", subtitle: "每条记录都保留数据来源")

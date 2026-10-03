@@ -217,9 +217,11 @@ public struct RankingMeasurement: Identifiable, Codable, Equatable, Sendable {
     public var protocolID: String
     public var date: Date
     public var origin: DataOrigin
-    public init(id: UUID = UUID(), personID: String, metric: RankingMetric, values: [String: Double], protocolID: String? = nil, date: Date = Date(), origin: DataOrigin) {
+    public var sourceRecordID: UUID?
+    public init(id: UUID = UUID(), personID: String, metric: RankingMetric, values: [String: Double], protocolID: String? = nil, date: Date = Date(), origin: DataOrigin, sourceRecordID: UUID? = nil) {
         self.id = id; self.personID = personID; self.metric = metric; self.values = values
         self.protocolID = protocolID ?? metric.protocolID; self.date = date; self.origin = origin
+        self.sourceRecordID = sourceRecordID
     }
     public func calculatedValue() throws -> Double {
         guard protocolID == metric.protocolID else { throw RankingValidationError.protocolMismatch }

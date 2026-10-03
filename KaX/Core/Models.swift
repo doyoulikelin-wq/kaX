@@ -144,8 +144,10 @@ public struct AppSnapshot: Codable, Equatable, Sendable {
     public var people: [Person]
     /// Optional so snapshots written before the static ranking feature still decode.
     public var rankingMeasurements: [RankingMeasurement]?
-    public init(schemaVersion: Int = 1, profile: UserProfile, records: [MeasurementRecord], posts: [FeedPost], people: [Person], rankingMeasurements: [RankingMeasurement]? = nil) {
+    public var staticMeasurements: [StaticMeasurementRecord]?
+    public init(schemaVersion: Int = 1, profile: UserProfile, records: [MeasurementRecord], posts: [FeedPost], people: [Person], rankingMeasurements: [RankingMeasurement]? = nil, staticMeasurements: [StaticMeasurementRecord]? = nil) {
         self.schemaVersion = schemaVersion; self.profile = profile; self.records = records; self.posts = posts; self.people = people
         self.rankingMeasurements = rankingMeasurements
+        self.staticMeasurements = staticMeasurements
     }
 }
