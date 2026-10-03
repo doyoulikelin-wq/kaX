@@ -4,7 +4,7 @@
 
 ## 运行
 
-使用 Xcode 16 或更新版本打开 `KaX.xcodeproj`，选择 `KaX` scheme 和一个 iPhone 模拟器后运行。本次开发和验证环境为 Xcode 26.3 / iOS 26.3；最低系统版本为 iOS 17。
+使用 Xcode 16 或更新版本打开 `KaX.xcodeproj`，选择 `KaX` scheme 和一个 iPhone 模拟器后运行。本次开发和验证环境为 Xcode 26.3 / iOS 26.3.1 模拟器；最低系统版本为 iOS 17。
 
 工程没有第三方依赖，无需安装包管理器、配置服务器或填写密钥。真机运行需要在 Xcode 的 Signing & Capabilities 中选择开发者 Team。
 
@@ -12,11 +12,11 @@
 
 - **动态**：发现 / 关注、测量卡片与文字动态、点赞、评论、个人动态、关注、系统分享。
 - **测量**：身体尺寸、卧推基准记录、5 秒肌电演示采集、取消 / 重采 / 保存、来源与历史详情。
-- **排行**：示例用户和个人记录的卧推估算 1RM / 体重比较，全部 / 关注筛选。
+- **排行**：依据文件夹内静态公式表的 8 个独立榜：臂展比例、下肢比例、手宽长比、足宽长比、相对肩宽、肩腰宽比、腰臀宽比、腰臀围比。支持全部 / 关注、同口径原始尺寸录入、并列名次、逐人数据详情、公式与来源查看。
 - **我的**：编辑资料、选择展示指标、身份卡 PNG 分享、身体档案、最近测量、JSON 导出、带确认的本机重置。
 - **体验**：系统字体、语义色、克制的绿色强调色、深色模式、大字号支持、iPhone / iPad 自适应宽度。
 
-当前版本是可运行的**本机功能底座**。首次启动包含明确标记的示例数据；手动保存的数据标记为手动记录，模拟肌电标记为演示数据。社交操作会持久化到当前设备，没有远程账号、多人服务器或真实 BLE 连接。身体尺寸目前为人工输入，尚未实现参照卡视觉测量；肌电不会被解释为增肌潜力或损伤概率。
+当前版本是可运行的**本机功能底座**。首次启动包含明确标记的示例数据；手动保存的数据标记为手动记录，模拟肌电标记为演示数据。社交操作会持久化到当前设备，没有远程账号、多人服务器或真实 BLE 连接。身体尺寸目前为人工输入，尚未实现参照卡视觉测量。榜单按单项比值排列，只表示本机样本内的位置，没有综合天赋分或人群百分位；肌电不进入跨人榜单。
 
 ## 界面预览
 
@@ -29,7 +29,7 @@
   <img src="docs/screenshots/profile.png" width="220" alt="我的" />
 </p>
 
-[导出的身份卡图片](docs/screenshots/identity-card.png) · [深色大字号截图](docs/screenshots/dark-large-feed.png) · [小屏测量](docs/screenshots/compact-measurement.png) · [系统分享](docs/screenshots/native-share.png)
+[指标依据](docs/screenshots/ranking-evidence.png) · [比例记录](docs/screenshots/static-leg-ranking.png) · [导出的身份卡图片](docs/screenshots/identity-card.png) · [深色大字号截图](docs/screenshots/dark-large-feed.png) · [小屏测量](docs/screenshots/compact-measurement.png) · [系统分享](docs/screenshots/native-share.png)
 
 ## 结构
 
@@ -37,11 +37,13 @@
 KaX/
   App/                     应用入口、依赖创建、四个主导航
   Core/
-    Models.swift           资料、记录、来源、动态、评论、排名快照
+    Models.swift           资料、记录、来源、动态、评论、存储快照
     AppStore.swift         主线程状态和事务式用户操作
     Repository.swift       存储契约、JSON 原子持久化、版本保护
     MeasurementDevice.swift 设备契约、确定性演示设备、未接入适配器
-    ScoreCalculator.swift  有边界检查的计算规则
+    RankingModels.swift    8 项静态比例、测量口径、公式、来源与校验
+    RankingSampleData.swift 明确标记的合成原始尺寸样本
+    ScoreCalculator.swift  既有记录计算工具
     SampleData.swift       明确标记的演示样本
   Features/
     Social/                动态、发布、评论、个人动态
@@ -56,7 +58,7 @@ docs/architecture.md       接口边界、后续接入方式
 docs/validation.md         本轮验证结果与范围
 ```
 
-详见 [架构说明](docs/architecture.md) 与 [验证记录](docs/validation.md)。
+详见 [排行榜依据与公式](docs/ranking-evidence.md)、[架构说明](docs/architecture.md) 与 [验证记录](docs/validation.md)。
 
 ## 测试
 

@@ -136,24 +136,16 @@ public struct Person: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-public struct RankEntry: Identifiable, Codable, Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var initials: String
-    public var value: Double
-    public var isCurrentUser: Bool
-    public init(id: String, name: String, initials: String, value: Double, isCurrentUser: Bool) {
-        self.id = id; self.name = name; self.initials = initials; self.value = value; self.isCurrentUser = isCurrentUser
-    }
-}
-
 public struct AppSnapshot: Codable, Equatable, Sendable {
     public var schemaVersion: Int
     public var profile: UserProfile
     public var records: [MeasurementRecord]
     public var posts: [FeedPost]
     public var people: [Person]
-    public init(schemaVersion: Int = 1, profile: UserProfile, records: [MeasurementRecord], posts: [FeedPost], people: [Person]) {
+    /// Optional so snapshots written before the static ranking feature still decode.
+    public var rankingMeasurements: [RankingMeasurement]?
+    public init(schemaVersion: Int = 1, profile: UserProfile, records: [MeasurementRecord], posts: [FeedPost], people: [Person], rankingMeasurements: [RankingMeasurement]? = nil) {
         self.schemaVersion = schemaVersion; self.profile = profile; self.records = records; self.posts = posts; self.people = people
+        self.rankingMeasurements = rankingMeasurements
     }
 }

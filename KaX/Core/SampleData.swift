@@ -30,9 +30,8 @@ public enum SampleData {
         FeedPost(id: uuid(105), authorID: "xia", authorName: "夏夏", handle: "@xiaxia", initials: "夏", caption: "自己的卡片，慢慢更新。有人一起记录吗？", metricTitle: "卧推估算 1RM", metricValue: "48", metricUnit: "kg", tag: "力量起点", date: referenceDate.addingTimeInterval(-86_400), likes: 16, origin: .demo)
     ]
 
-    public static let snapshot = AppSnapshot(profile: profile, records: records, posts: posts, people: people)
-    public static let emptySnapshot = AppSnapshot(profile: UserProfile(id: "kax_me", name: "我", handle: "@kax_me", bio: "", heightCM: 0, weightKG: 0, armSpanCM: 0, waistCM: 0, featuredMetric: .benchPress, visibility: .friends), records: [], posts: [], people: [])
-    public static let benchPressRatios: [String: Double] = ["lin": 1.40, "yu": 1.21, "an": 1.02, "chen": 0.96, "xia": 0.80]
+    public static let snapshot = AppSnapshot(profile: profile, records: records, posts: posts, people: people, rankingMeasurements: RankingSampleData.measurements)
+    public static let emptySnapshot = AppSnapshot(profile: UserProfile(id: "kax_me", name: "我", handle: "@kax_me", bio: "", heightCM: 0, weightKG: 0, armSpanCM: 0, waistCM: 0, featuredMetric: .benchPress, visibility: .friends), records: [], posts: [], people: [], rankingMeasurements: [])
 
     private static func uuid(_ number: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", number))!

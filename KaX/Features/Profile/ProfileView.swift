@@ -8,6 +8,29 @@ struct ProfileView: View {
     @State private var settings = false
     @State private var sharePayload: CardSharePayload?
     @State private var shareError: String?
+    @State private var rankingDetail: ProfileRankingDetailPayload?
+
+    private var validRankingMeasurements: [RankingMeasurement] {
+        store.rankingMeasurements.filter {
+            $0.personID == store.profile.id && (try? $0.calculatedValue()) != nil
+        }
+    }
+
+    private var measurementItems: [ProfileMeasurementItem] {
+        let items = store.records.map(ProfileMeasurementItem.legacy)
+            + validRankingMeasurements.map(ProfileMeasurementItem.ranking)
+        return items.sorted {
+            $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date
+        }
+    }
+
+    private var monthlyMeasurementCount: Int {
+        let isThisMonth: (Date) -> Bool = {
+            Calendar.current.isDate($0, equalTo: Date(), toGranularity: .month)
+        }
+        return store.records.filter { $0.origin != .demo && isThisMonth($0.date) }.count
+            + validRankingMeasurements.filter { $0.origin != .demo && isThisMonth($0.date) }.count
+    }
 
     var body: some View {
         NavigationStack {
@@ -45,7 +68,7 @@ struct ProfileView: View {
                     VStack(spacing: 14) {
                         SectionHeading(title: "身体档案", subtitle: "让每一次变化有迹可循")
                         RoundedPanel {
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 24) {
+                            LazyVGrid(columns: dynamicType.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 24) {
                                 profileMetric("身高", value: store.profile.heightCM, unit: "cm")
                                 profileMetric("体重", value: store.profile.weightKG, unit: "kg")
                                 profileMetric("臂展", value: store.profile.armSpanCM, unit: "cm")
@@ -58,30 +81,39 @@ struct ProfileView: View {
                         }
                     }
                     VStack(spacing: 14) {
-                        SectionHeading(title: "最近测量", trailing: "\(store.records.count) 条记录")
-                        if store.records.isEmpty {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("最近测量").font(.headline)
+                            Spacer(minLength: 12)
+                            Text("\(measurementItems.count) 条记录")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("recentMeasurementCount")
+                        }
+                        if measurementItems.isEmpty {
                             Text("完成一次测量，你的记录会出现在这里。")
                                 .foregroundStyle(.secondary).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        ForEach(store.records.sorted { $0.date > $1.date }.prefix(4)) { record in
-                            NavigationLink {
-                                ProfileRecordDetail(record: record)
-                            } label: {
-                                HStack(spacing: 13) {
-                                    Image(systemName: record.kind.systemImage)
-                                        .font(.title3).foregroundStyle(KaXTheme.accent)
-                                        .frame(width: 44, height: 44)
-                                        .background(KaXTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(record.title).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-                                        Text(record.date, format: .dateTime.month().day()).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Text("\(record.value.formatted(.number.precision(.fractionLength(0...1)))) \(record.unit)")
-                                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                                }.padding(16).background(KaXTheme.card, in: RoundedRectangle(cornerRadius: 18))
-                            }.buttonStyle(.plain)
+                        ForEach(measurementItems.prefix(4)) { item in
+                            switch item {
+                            case .legacy(let record):
+                                NavigationLink {
+                                    ProfileRecordDetail(record: record)
+                                } label: {
+                                    recentMeasurementRow(item)
+                                }
+                                .buttonStyle(.plain)
+                            case .ranking(let measurement):
+                                Button {
+                                    guard let value = try? measurement.calculatedValue() else { return }
+                                    let entry = EvidenceRankEntry(id: store.profile.id, name: store.profile.name, initials: String(store.profile.name.prefix(1)), value: value, position: 0, isCurrentUser: true, measurement: measurement)
+                                    rankingDetail = ProfileRankingDetailPayload(entry: entry)
+                                } label: {
+                                    recentMeasurementRow(item)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("recentRanking-\(measurement.id.uuidString)")
+                            }
                         }
                     }
                     Text("本机体验 · 示例好友与历史记录用于展示产品流程")
@@ -98,6 +130,10 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $editing) { EditProfileView(profile: store.profile) }
             .sheet(isPresented: $settings) { SettingsView() }
+            .sheet(item: $rankingDetail) { payload in
+                RankingEntryDetailView(metric: payload.entry.measurement.metric, entry: payload.entry)
+                    .environment(store)
+            }
             .sheet(item: $sharePayload) { payload in ActivityShareView(items: [payload.url, shareText]) }
             .alert("暂时无法生成卡片", isPresented: Binding(get: { shareError != nil }, set: { if !$0 { shareError = nil } })) {
                 Button("知道了") { shareError = nil }
@@ -110,17 +146,26 @@ struct ProfileView: View {
         switch store.profile.featuredMetric {
         case .benchPress: store.latestStrength
         case .armSpan:
-            if let body = store.latestBody, store.profile.heightCM > 0 {
+            if let entry = featuredArmSpanEntry {
+                MeasurementRecord(date: entry.measurement.date, kind: .body, title: "臂展比例", value: entry.value, unit: "× 身高", origin: entry.measurement.origin)
+            } else if let body = store.latestBody, store.profile.heightCM > 0 {
                 MeasurementRecord(date: body.date, kind: .body, title: "臂展比例", value: store.profile.armSpanCM / store.profile.heightCM, unit: "× 身高", origin: body.origin)
             } else { nil }
         case .consistency:
-            MeasurementRecord(kind: .body, title: "本月测量", value: Double(store.records.filter { $0.origin != .demo && Calendar.current.isDate($0.date, equalTo: Date(), toGranularity: .month) }.count), unit: "次", origin: .manual)
+            MeasurementRecord(kind: .body, title: "本月测量", value: Double(monthlyMeasurementCount), unit: "次", origin: .manual)
         }
     }
 
+    private var featuredArmSpanEntry: EvidenceRankEntry? {
+        guard let entry = store.rankingEntries(for: .armSpanRatio).first(where: \.isCurrentUser) else { return nil }
+        // A newer legacy body record remains visible, but does not gain a protocol it never recorded.
+        if let body = store.latestBody, body.date > entry.measurement.date { return nil }
+        return entry
+    }
+
     private var featuredRank: Int? {
-        guard store.profile.featuredMetric == .benchPress else { return nil }
-        return store.leaderboard.firstIndex(where: \.isCurrentUser).map { $0 + 1 }
+        guard store.profile.featuredMetric == .armSpan else { return nil }
+        return featuredArmSpanEntry?.position
     }
 
     private var shareText: String {
@@ -147,12 +192,101 @@ struct ProfileView: View {
     private func profileMetric(_ title: String, value: Double, unit: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value, format: .number.precision(.fractionLength(0...1))).font(.title2.weight(.semibold)).monospacedDigit()
-                Text(unit).font(.caption).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(value, format: .number.precision(.fractionLength(0...1))).font(.title2.weight(.semibold)).monospacedDigit().fixedSize()
+                    Text(unit).font(.caption).foregroundStyle(.secondary).fixedSize()
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(value, format: .number.precision(.fractionLength(0...1))).font(.title2.weight(.semibold)).monospacedDigit()
+                    Text(unit).font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
+
+    private func recentMeasurementRow(_ item: ProfileMeasurementItem) -> some View {
+        let layout = dynamicType.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 13))
+        return layout {
+            HStack(alignment: .top, spacing: 13) {
+                Image(systemName: item.symbol)
+                    .font(.title3).foregroundStyle(KaXTheme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(KaXTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(item.title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(item.date, format: .dateTime.month().day())
+                        .font(.caption).foregroundStyle(.secondary)
+                    OriginBadge(origin: item.origin)
+                }
+            }
+            if !dynamicType.isAccessibilitySize { Spacer(minLength: 0) }
+            Text(item.valueText)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !dynamicType.isAccessibilitySize {
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(16)
+        .background(KaXTheme.card, in: RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+private enum ProfileMeasurementItem: Identifiable {
+    case legacy(MeasurementRecord)
+    case ranking(RankingMeasurement)
+
+    var id: String {
+        switch self {
+        case .legacy(let record): return "legacy-\(record.id.uuidString)"
+        case .ranking(let record): return "ranking-\(record.id.uuidString)"
+        }
+    }
+    var date: Date {
+        switch self {
+        case .legacy(let record): return record.date
+        case .ranking(let record): return record.date
+        }
+    }
+    var title: String {
+        switch self {
+        case .legacy(let record): return record.title
+        case .ranking(let record): return record.metric.title
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .legacy(let record): return record.kind.systemImage
+        case .ranking: return "ruler"
+        }
+    }
+    var origin: DataOrigin {
+        switch self {
+        case .legacy(let record): return record.origin
+        case .ranking(let record): return record.origin
+        }
+    }
+    var valueText: String {
+        switch self {
+        case .legacy(let record):
+            return "\(record.value.formatted(.number.precision(.fractionLength(0...1)))) \(record.unit)"
+        case .ranking(let record):
+            guard let value = try? record.calculatedValue() else { return "未记录" }
+            return "\(record.metric.formattedValue(value)) \(record.metric.unit)"
+        }
+    }
+}
+
+private struct ProfileRankingDetailPayload: Identifiable {
+    let entry: EvidenceRankEntry
+    var id: UUID { entry.measurement.id }
 }
 
 private struct CardSharePayload: Identifiable {
@@ -190,6 +324,7 @@ struct IdentityCardView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text(record.value, format: .number.precision(.fractionLength(0...(profile.featuredMetric == .armSpan ? 2 : 1))))
                             .font(.system(size: 54, weight: .medium, design: .rounded)).monospacedDigit()
+                            .accessibilityIdentifier("identityMetricValue")
                         Text(record.unit).font(.title3).foregroundStyle(.white.opacity(0.6))
                         if record.kind == .strength, let repetitions = record.secondaryValue {
                             Text("× \(Int(repetitions))").font(.title3).foregroundStyle(.white.opacity(0.6))

@@ -119,9 +119,9 @@ import XCTest
         XCTAssertFalse(app.staticTexts["林野"].exists)
         tab("排行")
         app.segmentedControls["leaderboardFilterPicker"].buttons["关注"].tap()
-        XCTAssertFalse(app.staticTexts["林野"].exists)
+        XCTAssertFalse(app.buttons["rankEntry-lin"].exists)
         app.segmentedControls["leaderboardFilterPicker"].buttons["全部"].tap()
-        XCTAssertTrue(app.staticTexts["林野"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["rankEntry-lin"].waitForExistence(timeout: 5))
     }
 
     func testShareCardProducesNativePreview() {
@@ -160,9 +160,122 @@ import XCTest
         tab("测量")
         XCTAssertTrue(app.buttons["bodyMeasurementButton"].waitForExistence(timeout: 5))
         capture("10-dark-large-measurement")
+        tab("排行")
+        XCTAssertTrue(app.buttons["rankingMetricPicker"].waitForExistence(timeout: 5))
+        capture("16-dark-large-static-ranking")
         tab("我的")
         XCTAssertTrue(app.buttons["editProfileButton"].waitForExistence(timeout: 5))
         capture("11-dark-large-profile")
+        for _ in 0..<5 {
+            if app.staticTexts["身体档案"].firstMatch.isHittable { break }
+            app.swipeUp()
+        }
+        capture("19-dark-large-body-profile")
+    }
+
+    func testStaticLegRatioValidationEvidenceAndPersistence() {
+        tab("排行")
+        selectRankingMetric("legBodyRatio")
+        app.buttons["leaderboardInfoButton"].tap()
+        XCTAssertTrue(app.staticTexts["rankingFormula"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "SM07")).firstMatch.exists)
+        capture("17-static-evidence")
+        app.buttons["closeRankingEvidenceButton"].tap()
+        revealAndTap("recordRankingMeasurementButton")
+        let height = app.textFields["rankingInput-heightCM"]
+        XCTAssertTrue(height.waitForExistence(timeout: 5))
+        replace(height, with: "180")
+        replace(app.textFields["rankingInput-sittingHeightCM"], with: "190")
+        XCTAssertFalse(app.buttons["saveRankingMeasurementButton"].isEnabled)
+        replace(app.textFields["rankingInput-sittingHeightCM"], with: "90")
+        dismissKeyboard()
+        XCTAssertTrue(app.staticTexts["rankingCalculatedValue"].label.contains("0.50"))
+        app.buttons["saveRankingMeasurementButton"].tap()
+        waitForDismissal(of: height)
+        XCTAssertTrue(app.otherElements["currentUserRank"].waitForExistence(timeout: 5))
+        capture("13-static-leg-ratio")
+        relaunchWithoutReset()
+        tab("排行")
+        selectRankingMetric("legBodyRatio")
+        XCTAssertTrue(app.otherElements["currentUserRank"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["0.50 倍"].firstMatch.exists || app.staticTexts["0.50"].firstMatch.exists)
+    }
+
+    func testStaticWidthsAndGirthsStaySeparate() {
+        tab("排行")
+        app.segmentedControls["rankingCategoryPicker"].buttons["当前形体"].tap()
+        selectRankingMetric("shoulderWaistWidthRatio")
+        revealAndTap("recordRankingMeasurementButton")
+        let shoulder = app.textFields["rankingInput-shoulderWidthCM"]
+        XCTAssertTrue(shoulder.waitForExistence(timeout: 5))
+        replace(shoulder, with: "48")
+        replace(app.textFields["rankingInput-waistWidthCM"], with: "32")
+        dismissKeyboard()
+        app.buttons["saveRankingMeasurementButton"].tap()
+        waitForDismissal(of: shoulder)
+        XCTAssertTrue(app.staticTexts["1.50"].firstMatch.waitForExistence(timeout: 5))
+        selectRankingMetric("waistHipGirthRatio")
+        revealAndTap("recordRankingMeasurementButton")
+        let waist = app.textFields["rankingInput-waistGirthCM"]
+        XCTAssertTrue(waist.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textFields["rankingInput-waistWidthCM"].exists)
+        replace(waist, with: "80")
+        replace(app.textFields["rankingInput-hipGirthCM"], with: "100")
+        dismissKeyboard()
+        app.buttons["saveRankingMeasurementButton"].tap()
+        waitForDismissal(of: waist)
+        XCTAssertTrue(app.staticTexts["0.80"].firstMatch.waitForExistence(timeout: 5))
+        capture("14-static-girth-ratio")
+        selectRankingMetric("shoulderWaistWidthRatio")
+        XCTAssertTrue(app.staticTexts["1.50"].firstMatch.exists)
+    }
+
+    func testStaticArmSpanUpdatesIdentityCard() {
+        tab("排行")
+        revealAndTap("recordRankingMeasurementButton")
+        let armSpan = app.textFields["rankingInput-armSpanCM"]
+        XCTAssertTrue(armSpan.waitForExistence(timeout: 5))
+        replace(armSpan, with: "198")
+        replace(app.textFields["rankingInput-heightCM"], with: "180")
+        dismissKeyboard()
+        app.buttons["saveRankingMeasurementButton"].tap()
+        waitForDismissal(of: armSpan)
+        tab("我的")
+        XCTAssertTrue(app.staticTexts["1.1"].firstMatch.waitForExistence(timeout: 5) || app.staticTexts["1.10"].firstMatch.exists)
+        capture("15-static-identity-card")
+        let recent = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "recentRanking-")).firstMatch
+        for _ in 0..<5 {
+            if recent.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(recent.isHittable)
+        recent.tap()
+        capture("18-static-record-detail")
+        let detailSpan = app.descendants(matching: .any).matching(identifier: "rankingInput-armSpanCM").firstMatch
+        let detailHeight = app.descendants(matching: .any).matching(identifier: "rankingInput-heightCM").firstMatch
+        XCTAssertTrue(detailSpan.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(detailSpan.label.contains("198"))
+        XCTAssertTrue(detailHeight.label.contains("180"))
+        app.navigationBars.buttons["完成"].tap()
+        for _ in 0..<5 {
+            if app.buttons["editProfileButton"].isHittable { break }
+            app.swipeDown()
+        }
+        app.buttons["editProfileButton"].tap()
+        app.buttons["featuredMetricPicker"].tap()
+        app.buttons["记录习惯"].tap()
+        app.buttons["saveProfileButton"].tap()
+        // SwiftUI propagates this card's identifier to its text children.
+        let monthCount = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label == %@", "identityCard", "1")).firstMatch
+        XCTAssertTrue(monthCount.waitForExistence(timeout: 5))
+        capture("20-static-month-count")
+    }
+
+    private func selectRankingMetric(_ identifier: String) {
+        app.buttons["rankingMetricPicker"].tap()
+        let option = app.buttons["selectMetric-\(identifier)"]
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        option.tap()
     }
 
     private func tab(_ name: String) { app.tabBars.buttons[name].tap() }
@@ -170,6 +283,11 @@ import XCTest
     private func replace(_ field: XCUIElement, with text: String) {
         // Dismiss the previous numeric keyboard before reaching fields below it on small phones.
         dismissKeyboard()
+        for _ in 0..<4 {
+            if field.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(field.isHittable)
         field.tap()
         if let current = field.value as? String, !current.isEmpty, current != field.placeholderValue {
             field.press(forDuration: 1.1)
@@ -179,9 +297,13 @@ import XCTest
             if cut.waitForExistence(timeout: 2) {
                 cut.tap()
             } else {
-                XCTFail("Text editing menu did not expose Cut: \(app.debugDescription)")
-                return
+                // Numeric fields do not always expose the edit menu on this simulator.
+                // Tap past the rendered number to place the insertion point at its end.
+                field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
             }
+            let cleared = field.value as? String ?? ""
+            XCTAssertTrue(cleared.isEmpty || cleared == field.placeholderValue)
         }
         field.typeText(text)
         XCTAssertEqual(field.value as? String, text)

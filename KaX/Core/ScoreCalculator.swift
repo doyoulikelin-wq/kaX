@@ -13,7 +13,8 @@ public enum ScoreError: LocalizedError, Equatable {
 }
 
 public enum ScoreCalculator {
-    /// Epley estimate; a completed single repetition is returned without extrapolation.
+    /// Legacy Epley estimate; not used by the current static dimension rankings.
+    /// A completed single repetition is returned without extrapolation.
     public static func estimatedOneRepMax(weight: Double, repetitions: Int) throws -> Double {
         guard weight.isFinite, weight > 0 else { throw ScoreError.invalidWeight }
         guard (1...30).contains(repetitions) else { throw ScoreError.invalidRepetitions }

@@ -3,8 +3,10 @@ import SwiftUI
 struct RankingView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var category: RankingCategory = .structure
+    @State private var metric: RankingMetric = .armSpanRatio
     @State private var scope: RankingScope = .all
-    @State private var showsRules = false
+    @State private var activeSheet: RankingSheet?
 
     private enum RankingScope: String, CaseIterable, Identifiable {
         case all = "全部"
@@ -12,46 +14,94 @@ struct RankingView: View {
         var id: String { rawValue }
     }
 
-    private var entries: [RankEntry] {
-        let followingIDs = Set(store.people.filter(\.isFollowing).map(\.id))
-        return store.leaderboard.filter { entry in
-            entry.value > 0 && (scope == .all || entry.isCurrentUser || followingIDs.contains(entry.id))
+    private enum RankingSheet: Identifiable {
+        case measurement(RankingMetric)
+        case evidence(RankingMetric)
+        case entry(RankingMetric, EvidenceRankEntry)
+
+        var id: String {
+            switch self {
+            case .measurement(let metric): return "measurement-\(metric.id)"
+            case .evidence(let metric): return "evidence-\(metric.id)"
+            case .entry(let metric, let entry): return "entry-\(metric.id)-\(entry.id)"
+            }
         }
     }
 
-    private var myRank: Int? {
-        entries.firstIndex(where: \.isCurrentUser).map { $0 + 1 }
+    private var availableMetrics: [RankingMetric] {
+        RankingMetric.allCases.filter { $0.category == category }
+    }
+
+    private var entries: [EvidenceRankEntry] {
+        store.rankingEntries(for: metric, followingOnly: scope == .friends)
+    }
+
+    private var ownEntry: EvidenceRankEntry? {
+        entries.first(where: \.isCurrentUser)
+    }
+
+    private var requiredInputs: String {
+        metric.inputFields.map(\.title).joined(separator: "、")
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 7) {
-                            Circle().fill(KaXTheme.accent).frame(width: 5, height: 5)
-                            Text("示例榜单")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(KaXTheme.muted)
-                        }
-                        Text("看看你的力量，\n在小圈子里的位置。")
-                            .font(.title2.weight(.semibold))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("每一项，都有测量依据")
+                            .font(.title3.weight(.semibold))
+                        Text("尺寸比例与当前形体，分别记录。")
+                            .font(.subheadline)
+                            .foregroundStyle(KaXTheme.muted)
                             .fixedSize(horizontal: false, vertical: true)
-                        HStack(alignment: .top, spacing: 12) {
-                            if dynamicTypeSize.isAccessibilitySize {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Label("卧推", systemImage: "dumbbell")
-                                    Text("体重比").foregroundStyle(KaXTheme.muted)
-                                }
-                            } else {
-                                Label("卧推", systemImage: "dumbbell")
-                                Text("·").foregroundStyle(KaXTheme.muted)
-                                Text("体重比").foregroundStyle(KaXTheme.muted)
-                            }
-                            Spacer(minLength: 0)
-                            rulesButton
+                    }
+
+                    Picker("数据类别", selection: $category) {
+                        ForEach(RankingCategory.allCases) { item in
+                            Text(item.title).tag(item)
                         }
-                        .font(.subheadline.weight(.medium))
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("rankingCategoryPicker")
+
+                    HStack(alignment: .center, spacing: 12) {
+                        Menu {
+                            ForEach(availableMetrics) { item in
+                                Button {
+                                    metric = item
+                                } label: {
+                                    HStack {
+                                        Text(item.title)
+                                        if item == metric {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                                .accessibilityIdentifier("selectMetric-\(item.rawValue)")
+                            }
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(metric.title)
+                                    .font(.title3.weight(.semibold))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .foregroundStyle(KaXTheme.ink)
+                            .frame(minHeight: 44, alignment: .leading)
+                        }
+                        .accessibilityLabel("选择排行指标，当前\(metric.title)")
+                        .accessibilityIdentifier("rankingMetricPicker")
+                        Spacer(minLength: 0)
+                        Button {
+                            activeSheet = .evidence(metric)
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .frame(minWidth: 44, minHeight: 44)
+                        }
+                        .accessibilityLabel("查看\(metric.title)的指标依据")
+                        .accessibilityIdentifier("leaderboardInfoButton")
                     }
 
                     Picker("榜单范围", selection: $scope) {
@@ -62,47 +112,38 @@ struct RankingView: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("leaderboardFilterPicker")
 
-                    if let mine = entries.first(where: \.isCurrentUser), let myRank {
-                        RoundedPanel {
-                            ViewThatFits(in: .horizontal) {
-                                HStack(alignment: .center, spacing: 16) {
-                                    currentMetric(mine).fixedSize()
-                                    Spacer(minLength: 10)
-                                    currentPosition(myRank).fixedSize()
-                                }
-                                VStack(alignment: .leading, spacing: 18) {
-                                    currentMetric(mine)
-                                    currentPosition(myRank)
-                                }
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("currentUserRank")
-                    } else {
-                        RoundedPanel {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("我的卧推体重比").font(.caption).foregroundStyle(KaXTheme.muted)
-                                Text("待记录").font(.title2.weight(.semibold))
-                                Text("先在测量页录入自己的身体数据（含体重）和卧推力量记录，再参与排名。")
-                                    .font(.footnote)
-                                    .foregroundStyle(KaXTheme.muted)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
+                    ownMeasurementCard
 
                     VStack(alignment: .leading, spacing: 12) {
-                        SectionHeading(title: scope == .all ? "卧推榜" : "关注的人 · 卧推榜", trailing: "\(entries.count) 人")
+                        ViewThatFits(in: .horizontal) {
+                            HStack {
+                                sampleHeading.fixedSize()
+                                Spacer(minLength: 12)
+                                sampleCount.fixedSize()
+                            }
+                            VStack(alignment: .leading, spacing: 5) {
+                                sampleHeading
+                                sampleCount
+                            }
+                        }
+                        Text("采用每人同口径的最新记录，校验合格后入榜。")
+                            .font(.caption)
+                            .foregroundStyle(KaXTheme.muted)
                         if entries.isEmpty {
-                            EmptyStateView(symbol: "chart.bar", title: "这里还没有排名", message: "先录入自己的身体数据（含体重）和卧推力量记录，便可参与排名。")
+                            EmptyStateView(
+                                symbol: "ruler",
+                                title: "本项还没有数据",
+                                message: "记录\(requiredInputs)，即可查看你在本机样本中的位置。"
+                            )
+                            .padding(.vertical, 12)
                         } else {
-                            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                                rankingRow(entry, position: index + 1)
+                            ForEach(entries) { entry in
+                                rankingRow(entry)
                             }
                         }
                     }
 
-                    Text("此榜由本机示例人物和你的记录组成。排名仅表示这些记录之间的顺序，不代表真实人群百分位。")
+                    Text("按本项数值从高到低排列。排位只表示本机样本中的静态数据位置，不代表优劣、综合天赋或真实人群百分位。")
                         .font(.caption)
                         .foregroundStyle(KaXTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -113,128 +154,168 @@ struct RankingView: View {
                 .pageWidth()
             }
             .background(KaXTheme.background)
-            .navigationTitle("榜单")
-            .sheet(isPresented: $showsRules) {
-                leaderboardRules
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
+            .navigationTitle("数据排行")
+            .onChange(of: category) { _, newCategory in
+                if metric.category != newCategory,
+                   let firstMetric = RankingMetric.allCases.first(where: { $0.category == newCategory }) {
+                    metric = firstMetric
+                }
+            }
+            .sheet(item: $activeSheet) { sheet in
+                Group {
+                    switch sheet {
+                    case .measurement(let selectedMetric):
+                        RankingMeasurementForm(metric: selectedMetric)
+                    case .evidence(let selectedMetric):
+                        RankingEvidenceView(metric: selectedMetric)
+                    case .entry(let selectedMetric, let entry):
+                        RankingEntryDetailView(metric: selectedMetric, entry: entry)
+                    }
+                }
+                .environment(store)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
             }
             .accessibilityIdentifier("leaderboardScreen")
         }
     }
 
-    private var rulesButton: some View {
-        Button { showsRules = true } label: {
-            Image(systemName: "info.circle")
-                .frame(minWidth: 44, minHeight: 44)
-        }
-        .accessibilityLabel("查看榜单说明")
-        .accessibilityIdentifier("leaderboardInfoButton")
-    }
-
-    private func rankingRow(_ entry: RankEntry, position: Int) -> some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 12) {
-                    rankPerson(entry, position: position)
-                    rankValue(entry)
-                        .padding(.leading, 36)
+    private var ownMeasurementCard: some View {
+        RoundedPanel {
+            VStack(alignment: .leading, spacing: 18) {
+                if let entry = ownEntry {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .center, spacing: 16) {
+                            currentMetric(entry).fixedSize()
+                            Spacer(minLength: 10)
+                            currentPosition(entry).fixedSize()
+                        }
+                        VStack(alignment: .leading, spacing: 16) {
+                            currentMetric(entry)
+                            currentPosition(entry)
+                        }
+                    }
+                    OriginBadge(origin: entry.measurement.origin)
+                } else {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("我的\(metric.title)")
+                            .font(.caption)
+                            .foregroundStyle(KaXTheme.muted)
+                        Text("待记录").font(.title2.weight(.semibold))
+                        Text("需要记录：\(requiredInputs)。")
+                            .font(.footnote)
+                            .foregroundStyle(KaXTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("同一次、同一测量口径的数据，才能放进本项比较。")
+                            .font(.caption)
+                            .foregroundStyle(KaXTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-            } else {
-                HStack(spacing: 12) {
-                    rankPerson(entry, position: position)
-                    Spacer(minLength: 5)
-                    rankValue(entry).fixedSize()
+                Button {
+                    activeSheet = .measurement(metric)
+                } label: {
+                    Text(ownEntry == nil ? "记录这项" : "重新测量")
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, minHeight: 36)
                 }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("recordRankingMeasurementButton")
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(entry.isCurrentUser ? KaXTheme.accent.opacity(0.07) : KaXTheme.card, in: RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(entry.isCurrentUser ? KaXTheme.accent.opacity(0.25) : KaXTheme.line, lineWidth: 1)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("currentUserRank")
+    }
+
+    private var sampleHeading: some View {
+        HStack(spacing: 6) {
+            Circle().fill(KaXTheme.accent).frame(width: 5, height: 5)
+            Text("本机示例榜").font(.headline)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("第\(position)名，\(entry.name)\(entry.isCurrentUser ? "，我" : "")，卧推体重比\(ratio(entry.value))倍")
+    }
+
+    private var sampleCount: some View {
+        Text("\(entries.count) 人样本")
+            .font(.caption)
+            .foregroundStyle(KaXTheme.muted)
+    }
+
+    private func rankingRow(_ entry: EvidenceRankEntry) -> some View {
+        Button {
+            activeSheet = .entry(metric, entry)
+        } label: {
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 12) {
+                        rankPerson(entry)
+                        rankValue(entry)
+                            .padding(.leading, 36)
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        rankPerson(entry)
+                        Spacer(minLength: 5)
+                        rankValue(entry).fixedSize()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(KaXTheme.muted)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(entry.isCurrentUser ? KaXTheme.accent.opacity(0.07) : KaXTheme.card, in: RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(entry.isCurrentUser ? KaXTheme.accent.opacity(0.25) : KaXTheme.line, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("第\(entry.position)名，\(entry.name)\(entry.isCurrentUser ? "，我" : "")，\(metric.title)\(metric.formattedValue(entry.value))\(metric.unit)，\(entry.measurement.origin.title)，查看原始测量")
         .accessibilityIdentifier("rankEntry-\(entry.id)")
     }
 
-    private func rankPerson(_ entry: RankEntry, position: Int) -> some View {
+    private func rankPerson(_ entry: EvidenceRankEntry) -> some View {
         HStack(spacing: 12) {
-            Text("\(position)")
+            Text("\(entry.position)")
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
-                .foregroundStyle(position <= 3 ? KaXTheme.accent : KaXTheme.muted)
+                .foregroundStyle(entry.isCurrentUser ? KaXTheme.accent : KaXTheme.muted)
                 .frame(minWidth: 24)
             AvatarView(initials: entry.initials)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.name)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(entry.isCurrentUser ? "\(entry.name) · 我" : entry.name)
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(KaXTheme.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                if entry.isCurrentUser {
-                    Text("我").font(.caption2.weight(.medium)).foregroundStyle(KaXTheme.accent)
-                }
+                OriginBadge(origin: entry.measurement.origin)
             }
         }
     }
 
-    private func rankValue(_ entry: RankEntry) -> some View {
-        Text("\(ratio(entry.value)) ×")
+    private func rankValue(_ entry: EvidenceRankEntry) -> some View {
+        Text("\(metric.formattedValue(entry.value)) \(metric.unit)")
             .font(.subheadline.weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(entry.isCurrentUser ? KaXTheme.accent : KaXTheme.ink)
     }
 
-    private func currentMetric(_ entry: RankEntry) -> some View {
+    private func currentMetric(_ entry: EvidenceRankEntry) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("我的卧推体重比").font(.caption).foregroundStyle(KaXTheme.muted)
-            MetricValue(value: ratio(entry.value), unit: "×")
+            Text("我的\(metric.title)").font(.caption).foregroundStyle(KaXTheme.muted)
+            MetricValue(value: metric.formattedValue(entry.value), unit: metric.unit)
         }
     }
 
-    private func currentPosition(_ position: Int) -> some View {
+    private func currentPosition(_ entry: EvidenceRankEntry) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("第 \(position) 名").font(.title3.weight(.semibold)).foregroundStyle(KaXTheme.accent)
-            Text("\(entries.count) 人示例榜").font(.caption).foregroundStyle(KaXTheme.muted)
-        }
-    }
-
-    private func ratio(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(2)))
-    }
-
-    private var leaderboardRules: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("卧推估计 1RM ÷ 体重")
-                        .font(.title2.weight(.semibold))
-                    Text("根据记录的重量与次数估计单次最大重量，再除以体重。例如，估计单次最大重量为 70 kg、体重 70 kg，显示为 1.00 倍。")
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("榜单按体重比从高到低排列。切换到关注，只显示你和已关注的示例好友。")
-                        .fixedSize(horizontal: false, vertical: true)
-                    RoundedPanel {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("示例榜单").font(.headline)
-                            Text("好友为示例人物，你的数值来自本机记录。这不是联网赛事，也不是对全球人群的统计。")
-                                .font(.subheadline)
-                                .foregroundStyle(KaXTheme.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .padding(24)
-                .pageWidth()
-            }
-            .background(KaXTheme.background)
-            .navigationTitle("榜单说明")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { showsRules = false }
-                }
-            }
+            Text("第 \(entry.position) 名")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(KaXTheme.accent)
+            Text("\(entries.count) 人本机样本")
+                .font(.caption)
+                .foregroundStyle(KaXTheme.muted)
         }
     }
 }

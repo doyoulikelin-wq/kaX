@@ -195,71 +195,11 @@ final class LocalAppRepositoryTests: XCTestCase {
         XCTAssertFalse(store.posts[1].isLiked)
     }
 
-    func testLatestRecordsUseDatesAndLeaderboardIgnoresFeaturedMetric() {
-        let repository = MemoryRepository(snapshot: SampleData.snapshot)
-        let store = AppStore(repository: repository)
-        let previous = store.leaderboard
-        var profile = store.profile
-        profile.featuredMetric = .consistency
-        store.saveProfile(profile)
-        XCTAssertEqual(store.leaderboard, previous)
+    func testLatestLegacyRecordsUseDates() {
+        let store = AppStore(repository: MemoryRepository(snapshot: SampleData.snapshot))
         let old = MeasurementRecord(date: SampleData.referenceDate.addingTimeInterval(-2_000_000), kind: .strength, title: "卧推", value: 100, unit: "kg", secondaryValue: 1, origin: .manual)
         store.addRecord(old)
         XCTAssertEqual(store.latestStrength?.id, SampleData.records[1].id)
-        let ratio = store.leaderboard.first(where: \.isCurrentUser)!.value
-        XCTAssertEqual(ratio, (70 * (1 + 5.0 / 30)) / 72, accuracy: 0.000001)
-    }
-
-    func testLeaderboardIncludesUnfollowedPeopleAndSortsTiesStably() {
-        var fixture = SampleData.snapshot
-        fixture.records = [
-            MeasurementRecord(kind: .body, title: "臂展", value: 184, unit: "cm", secondaryValue: 178, origin: .manual),
-            MeasurementRecord(kind: .strength, title: "卧推", value: 100.8, unit: "kg", origin: .manual)
-        ]
-        let store = AppStore(repository: MemoryRepository(snapshot: fixture))
-        XCTAssertEqual(store.leaderboard.count, fixture.people.count + 1)
-        XCTAssertTrue(store.leaderboard.contains(where: { $0.id == "chen" }))
-        XCTAssertTrue(store.leaderboard[0].isCurrentUser)
-        XCTAssertEqual(store.leaderboard[1].id, "lin")
-        let firstOrder = store.leaderboard.map(\.id)
-        store.toggleFollow(personID: "lin")
-        XCTAssertEqual(store.leaderboard.map(\.id), firstOrder)
-    }
-
-    func testNonDemoStrengthCannotRankWithDemoOrMissingBody() {
-        for origin in [DataOrigin.manual, .device] {
-            var fixture = SampleData.snapshot
-            fixture.records.append(MeasurementRecord(kind: .strength, title: "卧推", value: 80, unit: "kg", secondaryValue: 8, origin: origin))
-            let withDemoBody = AppStore(repository: MemoryRepository(snapshot: fixture))
-            XCTAssertFalse(withDemoBody.leaderboard.contains(where: \.isCurrentUser))
-            XCTAssertEqual(withDemoBody.leaderboard.count, SampleData.people.count)
-
-            fixture.records.removeAll { $0.kind == .body }
-            let withoutBody = AppStore(repository: MemoryRepository(snapshot: fixture))
-            XCTAssertFalse(withoutBody.leaderboard.contains(where: \.isCurrentUser))
-        }
-    }
-
-    func testManualBodyUnlocksManualStrengthRankWhileAllDemoStillRanks() throws {
-        let store = AppStore(repository: MemoryRepository(snapshot: SampleData.snapshot))
-        XCTAssertTrue(store.leaderboard.contains(where: \.isCurrentUser))
-        store.addRecord(MeasurementRecord(kind: .strength, title: "卧推", value: 80, unit: "kg", secondaryValue: 8, origin: .manual))
-        XCTAssertFalse(store.leaderboard.contains(where: \.isCurrentUser))
-        var measuredProfile = store.profile
-        measuredProfile.weightKG = 80
-        let body = MeasurementRecord(kind: .body, title: "臂展", value: measuredProfile.armSpanCM, unit: "cm", secondaryValue: measuredProfile.heightCM, origin: .manual)
-        store.saveBodyMeasurement(profile: measuredProfile, record: body)
-        let mine = try XCTUnwrap(store.leaderboard.first(where: \.isCurrentUser))
-        XCTAssertEqual(mine.value, (80 * (1 + 8.0 / 30)) / 80, accuracy: 0.000001)
-    }
-
-    func testLatestDemoBodyDoesNotUseAnOlderNonDemoBodyForRanking() {
-        var fixture = SampleData.snapshot
-        fixture.records.append(MeasurementRecord(date: SampleData.referenceDate.addingTimeInterval(-7_200), kind: .body, title: "臂展", value: 184, unit: "cm", secondaryValue: 178, origin: .manual))
-        fixture.records.append(MeasurementRecord(kind: .strength, title: "卧推", value: 80, unit: "kg", secondaryValue: 8, origin: .manual))
-        let store = AppStore(repository: MemoryRepository(snapshot: fixture))
-        XCTAssertEqual(store.latestBody?.origin, .demo)
-        XCTAssertFalse(store.leaderboard.contains(where: \.isCurrentUser))
     }
 
     func testProfileBoundsAndEmptyInitialization() {
@@ -333,6 +273,194 @@ final class LocalAppRepositoryTests: XCTestCase {
         store.publish(caption: "已知单次最大重量", recordID: singleMaximum.id)
         XCTAssertEqual(store.posts[0].origin, .manual)
         XCTAssertEqual(store.posts[0].metricUnit, "kg")
+    }
+}
+
+final class RankingMetricTests: XCTestCase {
+    func testAllEightStaticFormulasUseTheirOwnRawDimensions() throws {
+        let examples: [(RankingMetric, [String: Double], Double)] = [
+            (.armSpanRatio, ["armSpanCM": 184, "heightCM": 178], 184.0 / 178),
+            (.relativeShoulderWidth, ["shoulderWidthCM": 46, "heightCM": 178], 46.0 / 178),
+            (.legBodyRatio, ["heightCM": 178, "sittingHeightCM": 92], 86.0 / 178),
+            (.shoulderWaistWidthRatio, ["shoulderWidthCM": 46, "waistWidthCM": 28], 46.0 / 28),
+            (.waistHipWidthRatio, ["waistWidthCM": 28, "hipWidthCM": 35], 0.8),
+            (.waistHipGirthRatio, ["waistGirthCM": 78, "hipGirthCM": 96], 78.0 / 96),
+            (.handAspectRatio, ["handWidthCM": 8.5, "handLengthCM": 19], 8.5 / 19),
+            (.footAspectRatio, ["footWidthCM": 10, "footLengthCM": 26], 10.0 / 26)
+        ]
+        XCTAssertEqual(Set(examples.map { $0.0 }), Set(RankingMetric.allCases))
+        for (metric, values, expected) in examples {
+            XCTAssertEqual(try metric.calculatedValue(from: values), expected, accuracy: 0.000001)
+            XCTAssertEqual(metric.displayPrecision, 2)
+        }
+    }
+
+    func testMissingInvalidAndDifferentMeasurementDefinitionsAreRejected() {
+        for invalid in [0.0, -1, .nan, .infinity, 301] {
+            XCTAssertThrowsError(try RankingMetric.armSpanRatio.calculatedValue(from: ["armSpanCM": invalid, "heightCM": 178]))
+        }
+        XCTAssertThrowsError(try RankingMetric.armSpanRatio.calculatedValue(from: ["armSpanCM": 184]))
+        XCTAssertThrowsError(try RankingMetric.armSpanRatio.calculatedValue(from: ["armSpanCM": 184, "heightCM": 178, "weightKG": 72]))
+        XCTAssertThrowsError(try RankingMetric.legBodyRatio.calculatedValue(from: ["heightCM": 100, "sittingHeightCM": 100]))
+        XCTAssertThrowsError(try RankingMetric.handAspectRatio.calculatedValue(from: ["handWidthCM": 10, "handLengthCM": 9]))
+        XCTAssertThrowsError(try RankingMetric.footAspectRatio.calculatedValue(from: ["footWidthCM": 20, "footLengthCM": 19]))
+        XCTAssertThrowsError(try RankingMetric.waistHipWidthRatio.calculatedValue(from: ["waistGirthCM": 78, "hipGirthCM": 96]))
+        XCTAssertThrowsError(try RankingMetric.waistHipGirthRatio.calculatedValue(from: ["waistWidthCM": 28, "hipWidthCM": 35]))
+    }
+
+    func testSampleDimensionsAreExplicitDemoInputsForEveryMetricAndPerson() throws {
+        let expectedPeople = Set(SampleData.people.map(\.id) + [SampleData.profile.id])
+        let samples = RankingSampleData.measurements
+        XCTAssertEqual(samples.count, expectedPeople.count * RankingMetric.allCases.count)
+        XCTAssertEqual(Set(samples.map(\.personID)), expectedPeople)
+        for id in expectedPeople {
+            XCTAssertEqual(Set(samples.filter { $0.personID == id }.map(\.metric)), Set(RankingMetric.allCases))
+        }
+        for sample in samples {
+            XCTAssertEqual(sample.origin, .demo)
+            XCTAssertEqual(sample.protocolID, sample.metric.protocolID)
+            XCTAssertGreaterThan(try sample.calculatedValue(), 0)
+        }
+    }
+}
+
+@MainActor final class EvidenceRankingTests: XCTestCase {
+    private func measurement(person: String = "kax_me", span: Double, height: Double = 100, date: TimeInterval = 100, id: UUID = UUID(), origin: DataOrigin = .manual) -> RankingMeasurement {
+        RankingMeasurement(id: id, personID: person, metric: .armSpanRatio, values: ["armSpanCM": span, "heightCM": height], date: Date(timeIntervalSince1970: date), origin: origin)
+    }
+
+    func testRanksDisplayedTiesAndFiltersFollowingWithoutLosingCurrentUser() {
+        var fixture = SampleData.snapshot
+        fixture.people = [SampleData.people[0], SampleData.people[1]]
+        fixture.people[1].isFollowing = false
+        fixture.rankingMeasurements = [measurement(span: 103.4), measurement(person: "lin", span: 103.1), measurement(person: "yu", span: 102)]
+        let store = AppStore(repository: MemoryRepository(snapshot: fixture))
+        let all = store.rankingEntries(for: .armSpanRatio)
+        XCTAssertEqual(all.map(\.id), ["kax_me", "lin", "yu"])
+        XCTAssertEqual(all.map(\.position), [1, 1, 3])
+        XCTAssertEqual(all.map { RankingMetric.armSpanRatio.formattedValue($0.value) }, ["1.03", "1.03", "1.02"])
+        XCTAssertEqual(store.rankingEntries(for: .armSpanRatio).map(\.id), all.map(\.id))
+        let following = store.rankingEntries(for: .armSpanRatio, followingOnly: true)
+        XCTAssertEqual(following.map(\.id), ["kax_me", "lin"])
+        XCTAssertEqual(following.map(\.position), [1, 1])
+        store.toggleFollow(personID: "lin")
+        XCTAssertEqual(store.rankingEntries(for: .armSpanRatio, followingOnly: true).map(\.id), ["kax_me"])
+        XCTAssertEqual(store.rankingEntries(for: .armSpanRatio).map(\.id), all.map(\.id))
+    }
+
+    func testLatestMatchingProtocolWinsAndDamagedLatestDoesNotReviveOlderResult() throws {
+        let older = measurement(span: 120, date: 100)
+        let newer = measurement(span: 101, date: 200)
+        var otherProtocol = measurement(span: 130, date: 300)
+        otherProtocol.protocolID = "another.definition.v1"
+        var fixture = SampleData.snapshot
+        fixture.rankingMeasurements = [older, newer, otherProtocol]
+        var store = AppStore(repository: MemoryRepository(snapshot: fixture))
+        let mine = try XCTUnwrap(store.rankingEntries(for: .armSpanRatio).first(where: \.isCurrentUser))
+        XCTAssertEqual(mine.value, 1.01)
+        XCTAssertEqual(mine.measurement.id, newer.id)
+        var damaged = measurement(span: 140, date: 400)
+        damaged.values.removeValue(forKey: "heightCM")
+        fixture.rankingMeasurements!.append(damaged)
+        store = AppStore(repository: MemoryRepository(snapshot: fixture))
+        XCTAssertFalse(store.rankingEntries(for: .armSpanRatio).contains(where: \.isCurrentUser))
+        XCTAssertEqual(store.latestRankingMeasurement(for: .armSpanRatio)?.id, damaged.id)
+    }
+
+    func testSameDateLatestChoiceIsStableByRecordID() throws {
+        let firstID = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
+        let lastID = UUID(uuidString: "00000000-0000-4000-8000-000000000002")!
+        let first = measurement(span: 120, id: firstID)
+        let last = measurement(span: 101, id: lastID)
+        var fixture = SampleData.snapshot
+        for records in [[first, last], [last, first]] {
+            fixture.rankingMeasurements = records
+            let store = AppStore(repository: MemoryRepository(snapshot: fixture))
+            XCTAssertEqual(store.latestRankingMeasurement(for: .armSpanRatio)?.id, lastID)
+            XCTAssertEqual(try XCTUnwrap(store.rankingEntries(for: .armSpanRatio).first).value, 1.01)
+        }
+    }
+
+    func testManualMeasurementsNeverFillMissingInputsFromDemoProfileOrPreviousSamples() throws {
+        var fixture = SampleData.snapshot
+        var incomplete = measurement(span: 200, date: SampleData.referenceDate.timeIntervalSince1970 + 1)
+        incomplete.values.removeValue(forKey: "heightCM")
+        fixture.rankingMeasurements!.append(incomplete)
+        let store = AppStore(repository: MemoryRepository(snapshot: fixture))
+        XCTAssertFalse(store.rankingEntries(for: .armSpanRatio).contains(where: \.isCurrentUser))
+        let own = measurement(span: 200, height: 180, date: SampleData.referenceDate.timeIntervalSince1970 + 2)
+        store.saveRankingMeasurement(own)
+        let mine = try XCTUnwrap(store.rankingEntries(for: .armSpanRatio).first(where: \.isCurrentUser))
+        XCTAssertEqual(mine.value, 200.0 / 180, accuracy: 0.000001)
+        XCTAssertEqual(mine.measurement.origin, .manual)
+        XCTAssertEqual(mine.measurement.values, own.values)
+        var profile = store.profile
+        profile.heightCM = 190
+        store.saveProfile(profile)
+        XCTAssertEqual(store.rankingEntries(for: .armSpanRatio).first(where: \.isCurrentUser)?.value, mine.value)
+    }
+
+    func testInvalidUnknownProtocolForeignAndDeviceRecordsNeverWrite() {
+        let repository = MemoryRepository(snapshot: SampleData.snapshot)
+        let store = AppStore(repository: repository)
+        let original = store.rankingMeasurements
+        var missing = measurement(span: 184)
+        missing.values.removeValue(forKey: "heightCM")
+        var protocolMismatch = measurement(span: 184)
+        protocolMismatch.protocolID = "unknown"
+        var invalidDate = measurement(span: 184)
+        invalidDate.date = Date(timeIntervalSince1970: .infinity)
+        let collision = measurement(span: 184, id: RankingSampleData.measurements.first(where: { $0.personID == "lin" })!.id)
+        for record in [missing, protocolMismatch, invalidDate, measurement(person: "lin", span: 184), measurement(span: 0), measurement(span: 184, origin: .device), collision] {
+            store.saveRankingMeasurement(record)
+            XCTAssertEqual(store.rankingMeasurements, original)
+            XCTAssertEqual(repository.saveCount, 0)
+            XCTAssertNotNil(store.persistenceError)
+        }
+    }
+
+    func testRankingSaveFailureRollsBackAndSuccessfulSaveExportsRawDataWithoutDeletingHistory() throws {
+        let repository = MemoryRepository(snapshot: SampleData.snapshot)
+        let store = AppStore(repository: repository)
+        let original = store.rankingMeasurements
+        let record = measurement(span: 200, height: 180, date: SampleData.referenceDate.timeIntervalSince1970 + 1)
+        repository.failSaving = true
+        store.saveRankingMeasurement(record)
+        XCTAssertEqual(store.rankingMeasurements, original)
+        XCTAssertEqual(repository.snapshot, SampleData.snapshot)
+        XCTAssertNotNil(store.persistenceError)
+        repository.failSaving = false
+        store.saveRankingMeasurement(record)
+        XCTAssertEqual(repository.saveCount, 1)
+        XCTAssertEqual(store.latestRankingMeasurement(for: .armSpanRatio), record)
+        XCTAssertEqual(store.records, SampleData.records)
+        XCTAssertNil(store.persistenceError)
+        let decoded = try JSONDecoder().decode(AppSnapshot.self, from: XCTUnwrap(store.exportData()))
+        XCTAssertEqual(decoded, repository.snapshot)
+        XCTAssertTrue(decoded.rankingMeasurements!.contains(record))
+        let reopened = AppStore(repository: repository)
+        XCTAssertEqual(reopened.rankingEntries(for: .armSpanRatio), store.rankingEntries(for: .armSpanRatio))
+        store.resetDemo()
+        XCTAssertEqual(store.rankingMeasurements, RankingSampleData.measurements)
+    }
+
+    func testLegacyJSONMissingRankingKeyPreservesOldDataAndDoesNotInventPersonalProtocol() throws {
+        var old = SampleData.snapshot
+        old.rankingMeasurements = nil
+        old.records[0].origin = .manual
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalAppRepository.encode(old)) as? [String: Any])
+        json.removeValue(forKey: "rankingMeasurements")
+        let legacy = try JSONDecoder().decode(AppSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(legacy.rankingMeasurements)
+        XCTAssertEqual(legacy.records, old.records)
+        XCTAssertEqual(legacy.profile, old.profile)
+        let store = AppStore(repository: MemoryRepository(snapshot: legacy))
+        XCTAssertFalse(store.rankingEntries(for: .armSpanRatio).contains(where: \.isCurrentUser))
+        XCTAssertTrue(store.rankingMeasurements.allSatisfy { $0.personID != store.profile.id && $0.origin == .demo })
+        XCTAssertEqual(store.records, old.records)
+        XCTAssertTrue(AppStore(repository: MemoryRepository(snapshot: legacy), useDemoData: false).rankingMeasurements.isEmpty)
+        let empty = AppStore(repository: MemoryRepository(snapshot: nil), useDemoData: false)
+        XCTAssertTrue(empty.rankingEntries(for: .armSpanRatio).isEmpty)
     }
 }
 

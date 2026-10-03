@@ -7,6 +7,7 @@ public final class AppStore {
     public private(set) var records: [MeasurementRecord]
     public private(set) var posts: [FeedPost]
     public private(set) var people: [Person]
+    public private(set) var rankingMeasurements: [RankingMeasurement]
     public private(set) var persistenceError: String?
 
     @ObservationIgnored private let repository: any AppRepository
@@ -29,6 +30,7 @@ public final class AppStore {
             initialError = "本地读取失败：\(error.localizedDescription) 原文件已保留，暂不能覆盖保存。"
         }
         profile = initial.profile; records = initial.records; posts = initial.posts; people = initial.people
+        rankingMeasurements = initial.rankingMeasurements ?? (useDemoData ? RankingSampleData.measurements(for: initial.people) : [])
         persistenceError = initialError
     }
 
@@ -36,23 +38,52 @@ public final class AppStore {
     public var latestStrength: MeasurementRecord? { latest(.strength) }
     public var latestEMG: MeasurementRecord? { latest(.emg) }
 
-    /// Offline sample comparison of bench-press estimated 1RM / body weight.
-    /// A profile's featured card metric does not change this leaderboard.
-    public var leaderboard: [RankEntry] {
-        var entries = people.compactMap { person -> RankEntry? in
-            guard let value = SampleData.benchPressRatios[person.id] else { return nil }
-            return RankEntry(id: person.id, name: person.name, initials: person.initials, value: value, isCurrentUser: false)
+    public func latestRankingMeasurement(for metric: RankingMetric) -> RankingMeasurement? {
+        latestRankingMeasurement(for: metric, personID: profile.id)
+    }
+
+    /// Same metric and explicit manual protocol; descending size is not a talent score.
+    /// The latest matching record is validated after selection, so corruption cannot revive an older result.
+    public func rankingEntries(for metric: RankingMetric, followingOnly: Bool = false) -> [EvidenceRankEntry] {
+        var entries: [EvidenceRankEntry] = []
+        var ids: Set<String> = []
+        let candidates = people.filter { $0.id != profile.id && (!followingOnly || $0.isFollowing) }
+            + [Person(id: profile.id, name: profile.name, handle: profile.handle, initials: String(profile.name.prefix(1)), bio: profile.bio, isFollowing: true)]
+        for person in candidates where ids.insert(person.id).inserted {
+            guard let measurement = latestRankingMeasurement(for: metric, personID: person.id),
+                  let value = try? measurement.calculatedValue() else { continue }
+            entries.append(EvidenceRankEntry(id: person.id, name: person.name, initials: person.initials, value: value, position: 0, isCurrentUser: person.id == profile.id, measurement: measurement))
         }
-        let hasMeasuredBody = latestBody.map { $0.origin != .demo } ?? false
-        if let record = latestStrength, record.origin == .demo || hasMeasuredBody,
-           let oneRepMax = estimatedMaximum(for: record),
-           let ratio = try? ScoreCalculator.relativeStrength(oneRepMax: oneRepMax, bodyWeight: profile.weightKG) {
-            entries.append(RankEntry(id: profile.id, name: profile.name, initials: String(profile.name.prefix(1)), value: ratio, isCurrentUser: true))
+        // Use the very same formatter as the UI, including its rounding at decimal boundaries.
+        func displayedValue(_ entry: EvidenceRankEntry) -> Double { Double(metric.formattedValue(entry.value)) ?? entry.value }
+        entries.sort {
+            let lhs = displayedValue($0), rhs = displayedValue($1)
+            if lhs != rhs { return lhs > rhs }
+            if $0.measurement.date != $1.measurement.date { return $0.measurement.date < $1.measurement.date }
+            if $0.id != $1.id { return $0.id < $1.id }
+            return $0.measurement.id.uuidString < $1.measurement.id.uuidString
         }
-        return entries.sorted {
-            if $0.value != $1.value { return $0.value > $1.value }
-            if $0.isCurrentUser != $1.isCurrentUser { return $0.isCurrentUser }
-            return $0.id < $1.id
+        for index in entries.indices {
+            entries[index].position = index > 0 && displayedValue(entries[index]) == displayedValue(entries[index - 1])
+                ? entries[index - 1].position : index + 1
+        }
+        return entries
+    }
+
+    public func saveRankingMeasurement(_ record: RankingMeasurement) {
+        do {
+            guard record.personID == profile.id else { throw RankingValidationError.notCurrentUser }
+            if let existing = rankingMeasurements.first(where: { $0.id == record.id }),
+               existing.personID != record.personID || existing.metric != record.metric {
+                throw RankingValidationError.recordIdentityMismatch
+            }
+            _ = try record.calculatedValue()
+        } catch { persistenceError = "测量未保存：\(error.localizedDescription)"; return }
+        transaction { snapshot in
+            var measurements = snapshot.rankingMeasurements ?? []
+            measurements.removeAll { $0.id == record.id }
+            measurements.insert(record, at: 0)
+            snapshot.rankingMeasurements = measurements
         }
     }
 
@@ -144,16 +175,20 @@ public final class AppStore {
         catch { persistenceError = "导出失败：\(error.localizedDescription)"; return nil }
     }
 
-    private var snapshot: AppSnapshot { AppSnapshot(profile: profile, records: records, posts: posts, people: people) }
+    private var snapshot: AppSnapshot { AppSnapshot(profile: profile, records: records, posts: posts, people: people, rankingMeasurements: rankingMeasurements) }
 
     private func latest(_ kind: MeasurementKind) -> MeasurementRecord? {
         records.filter { $0.kind == kind }.max { $0.date < $1.date }
     }
 
-    private func estimatedMaximum(for record: MeasurementRecord) -> Double? {
-        guard let repetitions = record.secondaryValue else { return record.value }
-        guard repetitions.isFinite, (1...30).contains(repetitions), repetitions.rounded() == repetitions else { return nil }
-        return try? ScoreCalculator.estimatedOneRepMax(weight: record.value, repetitions: Int(repetitions))
+    private func latestRankingMeasurement(for metric: RankingMetric, personID: String) -> RankingMeasurement? {
+        let matching = rankingMeasurements.filter { $0.personID == personID && $0.metric == metric && $0.protocolID == metric.protocolID }
+        // An invalid date cannot establish which measurement is newest; do not select an older result.
+        if let invalid = matching.first(where: { !$0.date.timeIntervalSince1970.isFinite }) { return invalid }
+        return matching.max {
+            if $0.date != $1.date { return $0.date < $1.date }
+            return $0.id.uuidString < $1.id.uuidString
+        }
     }
 
     private func validProfile(_ candidate: UserProfile, allowsUnchangedEmpty: Bool = true) -> Bool {
@@ -198,6 +233,7 @@ public final class AppStore {
             // Save before applying, so an I/O failure cannot leave the visible state ahead of disk.
             try repository.save(candidate)
             profile = candidate.profile; records = candidate.records; posts = candidate.posts; people = candidate.people
+            rankingMeasurements = candidate.rankingMeasurements ?? []
             loadingFailed = false
             persistenceError = nil
         } catch { persistenceError = "本地保存失败：\(error.localizedDescription) 更改未应用。" }
